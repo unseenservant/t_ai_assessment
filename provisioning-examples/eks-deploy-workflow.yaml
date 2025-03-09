@@ -1,0 +1,82 @@
+name: Deploy to AWS EKS
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: false
+        default: 'latest'
+
+env:
+  AWS_REGION: us-west-2
+  EKS_CLUSTER_NAME: counter-app-eks-cluster
+  NAMESPACE: counter-app
+
+jobs:
+  deploy-to-eks:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set image tag from workflow dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "IMAGE_TAG=${{ github.event.inputs.image_tag }}" >> $GITHUB_ENV
+
+      - name: Download workflow artifact
+        if: github.event_name == 'workflow_run'
+        uses: dawidd6/action-download-artifact@v2
+        with:
+          workflow: build-and-push-docker-image.yml
+          run_id: ${{ github.event.workflow_run.id }}
+          name: workflow-data
+          path: /tmp/workflow-data
+
+      - name: Set image tag from previous workflow
+        if: github.event_name == 'workflow_run'
+        run: |
+          if [ -f "/tmp/workflow-data/image.txt" ]; then
+            IMAGE_TAG=$(cat /tmp/workflow-data/image.txt)
+            echo "IMAGE_TAG=${IMAGE_TAG}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.11.1'
+
+      - name: Create namespace if needed
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy Helm chart
+        run: |
+          helm upgrade --install counter-app ./counter-app-chart \
+            --namespace ${{ env.NAMESPACE }} \
+            --set image.repository=${{ secrets.DOCKER_USERNAME }}/counter-app \
+            --set image.tag=${IMAGE_TAG:-latest} \
+            --set ingress.enabled=true \
+            --set ingress.hosts[0].host=counter-app-eks.example.com \
+            --set postgres.storage.size=10Gi \
+            --debug

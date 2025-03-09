@@ -3,29 +3,46 @@ kind: Deployment
 metadata:
   name: {{ .Values.app.name }}
   labels:
-    {{- include "counter-app.flaskLabels" . | nindent 4 }}
+    app: {{ .Values.app.name }}
+  annotations:
+    "helm.sh/hook-weight": "10"
 spec:
   replicas: {{ .Values.app.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ .Values.app.strategy.rollingUpdate.maxSurge }}
+      maxUnavailable: {{ .Values.app.strategy.rollingUpdate.maxUnavailable }}
   selector:
     matchLabels:
-      {{- include "counter-app.flaskSelectorLabels" . | nindent 6 }}
+      app: {{ .Values.app.name }}
   template:
     metadata:
       labels:
-        {{- include "counter-app.flaskSelectorLabels" . | nindent 8 }}
+        app: {{ .Values.app.name }}
     spec:
+      securityContext:
+        runAsNonRoot: false
+        fsGroup: 1000
       initContainers:
         - name: init-postgres
           image: postgres:13
           command: ['sh', '-c', 
             'until pg_isready -h {{ .Values.postgres.name }} -p {{ .Values.postgres.service.port }} -U {{ .Values.database.user }}; 
             do echo waiting for postgres; sleep 2; done;']
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
       containers:
         - name: {{ .Values.app.name }}
           image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
           imagePullPolicy: {{ .Values.app.image.pullPolicy }}
           ports:
             - containerPort: {{ .Values.app.service.targetPort }}
+              name: http
           env:
             - name: DB_USER
               valueFrom:
@@ -54,23 +71,58 @@ spec:
               port: {{ .Values.app.service.targetPort }}
             initialDelaySeconds: {{ .Values.app.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.app.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.app.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.app.livenessProbe.failureThreshold }}
           readinessProbe:
             httpGet:
               path: {{ .Values.app.readinessProbe.path }}
               port: {{ .Values.app.service.targetPort }}
             initialDelaySeconds: {{ .Values.app.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.app.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.app.readinessProbe.timeoutSeconds }}
+            successThreshold: {{ .Values.app.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.app.readinessProbe.failureThreshold }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: {{ .Values.app.name }}
   labels:
-    {{- include "counter-app.flaskLabels" . | nindent 4 }}
+    app: {{ .Values.app.name }}
 spec:
   ports:
     - port: {{ .Values.app.service.port }}
       targetPort: {{ .Values.app.service.targetPort }}
   selector:
-    {{- include "counter-app.flaskSelectorLabels" . | nindent 4 }}
+    app: {{ .Values.app.name }}
   type: {{ .Values.app.service.type }}
+---
+# HPA can be controlled by values.yaml
+{{- if .Values.app.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .Values.app.name }}-hpa
+  labels:
+    app: {{ .Values.app.name }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .Values.app.name }}
+  minReplicas: {{ .Values.app.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.app.autoscaling.maxReplicas }}
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.app.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
