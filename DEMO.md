@@ -24,7 +24,27 @@ deployment.apps/postgres      1/1     1            1           15m
 NAME                                     DESIRED   CURRENT   READY   AGE
 replicaset.apps/counter-app-76cd7dd6cb   1         1         1       4m8s
 replicaset.apps/postgres-6b58c76ccd      1         1         1       15m
+
+NAME                                          REFERENCE                TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+horizontalpodautoscaler.autoscaling/counter-app-hpa   Deployment/counter-app   0%/80%    1         2         1          5m
 ```
+
+## Health Check and Autoscaling
+
+The application includes:
+
+1. **Health Check Endpoint**: A `/health` endpoint that verifies database connectivity
+   ```bash
+   $ curl http://$(minikube ip):$(kubectl get svc counter-app -o jsonpath='{.spec.ports[0].nodePort}')/health
+   {"status": "healthy", "database": "connected"}
+   ```
+
+2. **Horizontal Pod Autoscaler**: Automatically scales the Flask application based on CPU utilization
+   ```bash
+   $ kubectl get hpa
+   NAME             REFERENCE                TARGETS   MINPODS   MAXPODS   REPLICAS   AGE
+   counter-app-hpa   Deployment/counter-app   0%/80%    1         2         1          5m
+   ```
 
 ## Accessing the Application
 
@@ -92,7 +112,7 @@ To deploy or upgrade the application using the Helm chart:
 eval $(minikube docker-env)
 
 # Build the Docker image
-docker build -t counter-app:latest -f counter-app/app/Dockerfile.modified counter-app/app/
+docker build -t counter-app:latest -f counter-app/app/Dockerfile counter-app/app/
 
 # Install/upgrade the chart
 helm install counter-app ./counter-app-chart

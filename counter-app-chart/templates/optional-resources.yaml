@@ -1,0 +1,226 @@
+# Backup resources
+{{- if .Values.postgres.backup.enabled }}
+# Backup PV and PVC
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: postgres-backup-pv
+  labels:
+    app: postgres
+    purpose: backup
+  annotations:
+    "helm.sh/hook": "pre-install"
+    "helm.sh/hook-weight": "-5"
+spec:
+  storageClassName: {{ .Values.postgres.backup.storageClass }}
+  capacity:
+    storage: {{ .Values.postgres.backup.storage }}
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: {{ .Values.postgres.persistence.reclaimPolicy }}
+  hostPath:
+    path: "{{ .Values.postgres.persistence.path }}-backup"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backup-pvc
+  labels:
+    app: postgres
+    purpose: backup
+  annotations:
+    "helm.sh/hook": "pre-install"
+    "helm.sh/hook-weight": "-4"
+spec:
+  storageClassName: {{ .Values.postgres.backup.storageClass }}
+  volumeName: postgres-backup-pv
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.postgres.backup.storage }}
+---
+# Backup CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.postgres.name }}-backup
+  labels:
+    app: postgres
+  annotations:
+    "helm.sh/hook-weight": "15"
+spec:
+  schedule: {{ .Values.postgres.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.postgres.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.postgres.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 999
+            fsGroup: 999
+          containers:
+          - name: {{ .Values.postgres.name }}-backup
+            image: {{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+            command:
+            - /bin/bash
+            - -c
+            - |
+              # Create backup directory
+              mkdir -p /backups
+              
+              # Set backup filename with timestamp
+              BACKUP_FILE="/backups/postgres-$(date +%Y%m%d-%H%M%S).sql"
+              
+              # Perform backup
+              echo "Starting backup to $BACKUP_FILE"
+              pg_dump -h {{ .Values.postgres.name }} -U $POSTGRES_USER -d $POSTGRES_DB -f $BACKUP_FILE
+              
+              # Check if backup was successful
+              if [ $? -eq 0 ]; then
+                echo "Backup completed successfully"
+                
+                # Clean up old backups (keep last N days)
+                find /backups -name "postgres-*.sql" -type f -mtime +{{ .Values.postgres.backup.retentionDays }} -delete
+                echo "Old backups cleaned up"
+              else
+                echo "Backup failed"
+                exit 1
+              fi
+            env:
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: postgres-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: postgres-config
+                  key: POSTGRES_DB
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            volumeMounts:
+            - name: backup-volume
+              mountPath: /backups
+          volumes:
+          - name: backup-volume
+            persistentVolumeClaim:
+              claimName: postgres-backup-pvc
+          restartPolicy: OnFailure
+{{- end }}
+
+# Network policies
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.app.name }}-network-policy
+  labels:
+    app: {{ .Values.app.name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.app.name }}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow inbound traffic to the application from any source
+  - ports:
+    - port: {{ .Values.app.service.targetPort }}
+      protocol: TCP
+  egress:
+  # Allow outbound traffic only to the PostgreSQL database
+  - to:
+    - podSelector:
+        matchLabels:
+          app: {{ .Values.postgres.name }}
+    ports:
+    - port: {{ .Values.postgres.service.port }}
+      protocol: TCP
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.postgres.name }}-network-policy
+  labels:
+    app: {{ .Values.postgres.name }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .Values.postgres.name }}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow inbound traffic only from the counter app
+  - from:
+    - podSelector:
+        matchLabels:
+          app: {{ .Values.app.name }}
+    ports:
+    - port: {{ .Values.postgres.service.port }}
+      protocol: TCP
+  egress:
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+{{- end }}
+
+# Pod Disruption Budgets
+{{- if .Values.app.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Values.app.name }}-pdb
+  labels:
+    app: {{ .Values.app.name }}
+spec:
+  {{- if .Values.app.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.app.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ .Values.app.name }}
+{{- end }}
+
+{{- if .Values.postgres.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Values.postgres.name }}-pdb
+  labels:
+    app: {{ .Values.postgres.name }}
+spec:
+  {{- if .Values.postgres.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.postgres.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ .Values.postgres.name }}
+{{- end }}

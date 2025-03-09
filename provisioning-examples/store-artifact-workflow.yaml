@@ -1,0 +1,31 @@
+name: Store Workflow Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to store'
+        required: true
+      image:
+        description: 'Docker image to store'
+        required: true
+
+jobs:
+  store-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create image.txt
+        run: |
+          echo "${{ github.event.inputs.image }}" > image.txt
+          
+      - name: Create version.txt
+        run: |
+          echo "${{ github.event.inputs.version }}" > version.txt
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: workflow-data
+          path: |
+            image.txt
+            version.txt
