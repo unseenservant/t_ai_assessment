@@ -28,4 +28,31 @@ To access the Counter App:
      minikube service {{ .Values.app.name }}
 {{- end }}
 
+Health Check Endpoint:
+To check the health of the application, you can access the health endpoint:
+{{- if contains "NodePort" .Values.app.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ .Values.app.name }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  curl http://$NODE_IP:$NODE_PORT/health
+{{- else if contains "LoadBalancer" .Values.app.service.type }}
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ .Values.app.name }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  curl http://$SERVICE_IP:{{ .Values.app.service.port }}/health
+{{- else if contains "ClusterIP" .Values.app.service.type }}
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:{{ .Values.app.service.targetPort }}
+  curl http://127.0.0.1:8080/health
+{{- end }}
+
+Autoscaling:
+{{- if .Values.app.autoscaling.enabled }}
+The application is configured with autoscaling:
+  Min replicas: {{ .Values.app.autoscaling.minReplicas }}
+  Max replicas: {{ .Values.app.autoscaling.maxReplicas }}
+  Target CPU utilization: {{ .Values.app.autoscaling.targetCPUUtilizationPercentage }}%
+
+To check the status of the HorizontalPodAutoscaler:
+  kubectl get hpa {{ .Values.app.name }}-hpa --namespace {{ .Release.Namespace }}
+{{- else }}
+Autoscaling is disabled. To enable it, set app.autoscaling.enabled=true.
+{{- end }}
+
 For more information about the application, please refer to the README.md file.
