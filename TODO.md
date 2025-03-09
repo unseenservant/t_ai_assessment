@@ -1,0 +1,4 @@
+- name of script.sh
+- update dev_process.sh
+- validate README.md's match the code 
+- Demo, Demo documentation, and Demo Video (if possible)
