@@ -1,0 +1,64 @@
+# Application configuration
+app:
+  name: counter-app
+  replicaCount: 1
+  image:
+    repository: counter-app
+    tag: latest
+    pullPolicy: Never  # For local images
+  service:
+    type: NodePort
+    port: 80
+    targetPort: 5000
+  resources:
+    limits:
+      cpu: 300m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  livenessProbe:
+    path: /
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readinessProbe:
+    path: /
+    initialDelaySeconds: 5
+    periodSeconds: 5
+
+# PostgreSQL configuration
+postgres:
+  name: postgres
+  replicaCount: 1
+  image:
+    repository: postgres
+    tag: "13"
+    pullPolicy: IfNotPresent
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    storageClass: manual
+    size: 1Gi
+    path: "/mnt/data"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+  livenessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 1
+  
+# Database configuration
+database:
+  name: counter_db
+  user: postgres
+  password: postgres  # In production, use Helm secrets or external secrets
